@@ -1,82 +1,120 @@
-(function () {
-  var log = MyUtils.log,
-    getStorage = MyUtils.getStorage,
-    setStorage = MyUtils.setStorage;
+// popup.js
+(() => {
+  const getCurrentDateTime = () => new Date().toLocaleTimeString();
 
-  function createElement(tag, text, classList, attrs) {
-    var element = document.createElement(tag);
-    if (classList && classList.length) {
-      classList.forEach(function (cls) {
-        element.classList.add(cls);
+  const getStorage = (keys) =>
+    new Promise((resolve, reject) => {
+      chrome.storage.local.get(keys, (data) => {
+        if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+        else resolve(data);
       });
-    }
-    if (text) {
-      element.textContent = text;
-    }
-    if (attrs) {
-      for (var key in attrs) {
-        element[key] = attrs[key];
-      }
-    }
+    });
+
+  const setStorage = (data) =>
+    new Promise((resolve, reject) => {
+      chrome.storage.local.set(data, () => {
+        if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+        else resolve();
+      });
+    });
+
+  window.addEventListener('load', () => {
+    console.log(
+      `[${getCurrentDateTime()}] [popup] Интерфейс расширения открыт.`
+    );
+  });
+  window.addEventListener('unload', () => {
+    console.log(
+      `[${getCurrentDateTime()}] [popup] Интерфейс расширения закрыт.`
+    );
+  });
+
+  // Универсальная функция создания элемента
+  function createElement(tag = 'div', text = '', classList = [], attrs = {}) {
+    const element = document.createElement(tag);
+    element.classList.add(...classList);
+    element.innerHTML = text;
+    Object.entries(attrs).forEach(([key, value]) => {
+      element[key] = value;
+    });
     return element;
   }
 
   function useLoading(show) {
-    var loadingIndicator = document.querySelector('.loader__box');
+    const loadingIndicator = document.querySelector('.loader__box');
     if (!loadingIndicator) return;
     if (show) {
       loadingIndicator.style.display = 'flex';
       loadingIndicator.style.opacity = '1';
-      log('popup', 'Loading ON');
+      console.log(`[${getCurrentDateTime()}] [popup] Loading ON`);
     } else {
       loadingIndicator.style.opacity = '0';
       loadingIndicator.style.display = 'none';
-      log('popup', 'Loading OFF');
+      console.log(`[${getCurrentDateTime()}] [popup] Loading OFF`);
     }
   }
 
   function savePopupState(state) {
-    setStorage({ popupState: state }, function (err) {
-      if (err) {
-        log('popup', 'Ошибка сохранения состояния:', err);
-      } else {
-        log('popup', 'Состояние сохранено:', state);
-      }
-    });
+    setStorage({ popupState: state })
+      .then(() => {
+        console.log(
+          `[${getCurrentDateTime()}] [popup] Состояние сохранено:`,
+          state
+        );
+      })
+      .catch((error) => {
+        console.error(
+          `[${getCurrentDateTime()}] [popup] Ошибка сохранения состояния:`,
+          error
+        );
+      });
   }
 
-  function restorePopupState(callback) {
-    getStorage('popupState', function (err, data) {
-      if (err) {
-        log('popup', 'Ошибка восстановления состояния:', err);
-      } else {
-        log('popup', 'Восстановлено состояние:', data.popupState);
-        callback && callback(data.popupState);
+  async function restorePopupState() {
+    try {
+      const data = await getStorage('popupState');
+      console.log(
+        `[${getCurrentDateTime()}] [popup] Восстановлено состояние:`,
+        data.popupState
+      );
+      if (data.popupState) {
+        selectedWeek = data.popupState.selectedWeek || selectedWeek;
+        selectedSort = data.popupState.selectedSort || selectedSort;
       }
-    });
+    } catch (error) {
+      console.error(
+        `[${getCurrentDateTime()}] [popup] Ошибка восстановления состояния:`,
+        error
+      );
+    }
   }
 
-  var scheduleData = [];
-  var selectedWeek = 'this';
-  var selectedSort = 'sport';
-  var selectedOption = null;
-  var loadRetries = 0;
-  var maxRetries = 20;
+  let scheduleData = [];
+  let selectedWeek = 'this';
+  let selectedSort = 'sport';
+  let selectedOption = null;
+  let loadRetries = 0;
+  const maxRetries = 20;
 
-  function loadSchedule() {
-    getStorage(['schedule', 'scanningComplete'], function (err, data) {
-      scheduleData = (data && data.schedule) || [];
-      log('popup', 'Загружено расписание:', scheduleData);
-      if (!data || !data.scanningComplete) {
-        log(
-          'popup',
-          'Сканирование не завершено. Ожидание... (retry ' + loadRetries + ')'
+  async function loadSchedule() {
+    try {
+      const data = await getStorage(['schedule', 'scanningComplete']);
+      scheduleData = data.schedule || [];
+      console.log(
+        `[${getCurrentDateTime()}] [popup] Загружено расписание:`,
+        scheduleData
+      );
+      if (!data.scanningComplete) {
+        console.log(
+          `[${getCurrentDateTime()}] [popup] Сканирование не завершено. Ожидание... (retry ${loadRetries})`
         );
         loadRetries++;
         if (loadRetries < maxRetries) {
           setTimeout(loadSchedule, 500);
         } else {
-          log('popup', 'Превышено число попыток ожидания сканирования.');
+          console.warn(
+            `[${getCurrentDateTime()}] [popup] Превышено число попыток ожидания сканирования.`
+          );
           updateSelects();
           useLoading(false);
         }
@@ -84,54 +122,55 @@
         updateSelects();
         useLoading(false);
       }
-    });
+    } catch (error) {
+      console.error(
+        `[${getCurrentDateTime()}] [popup] Ошибка загрузки расписания:`,
+        error
+      );
+      useLoading(false);
+    }
   }
 
   function updateSelects() {
     useLoading(true);
-    var container = document.querySelector('.book__box');
+    const container = document.querySelector('.book__box');
     container.innerHTML = '';
-    var mainSelect = createElement('select', '', ['book__select']);
-    container.appendChild(mainSelect);
+
+    const mainSelect = createElement('select', '', ['book__select']);
+    container.append(mainSelect);
+
     if (selectedSort === 'sport') {
-      mainSelect.appendChild(
+      mainSelect.append(
         createElement('option', 'Select sport', ['book__select-item'], {
           disabled: true,
           selected: true,
         })
       );
-      var sports = [];
-      scheduleData.forEach(function (ev) {
-        if (sports.indexOf(ev.name) === -1) {
-          sports.push(ev.name);
-        }
-      });
-      log('popup', 'Доступные виды спорта:', sports);
-      sports.forEach(function (sport) {
-        var option = createElement('option', sport, ['book__select-item'], {
+      const sports = [...new Set(scheduleData.map((ev) => ev.name))];
+      console.log(
+        `[${getCurrentDateTime()}] [popup] Доступные виды спорта:`,
+        sports
+      );
+      sports.forEach((sport) => {
+        const option = createElement('option', sport, ['book__select-item'], {
           value: sport,
         });
-        mainSelect.appendChild(option);
+        mainSelect.append(option);
       });
     } else {
-      mainSelect.appendChild(
+      mainSelect.append(
         createElement('option', 'Select day', ['book__select-item'], {
           disabled: true,
           selected: true,
         })
       );
-      var days = [];
-      scheduleData.forEach(function (ev) {
-        if (days.indexOf(ev.day) === -1) {
-          days.push(ev.day);
-        }
-      });
-      log('popup', 'Доступные дни:', days);
-      days.forEach(function (day) {
-        var option = createElement('option', day, ['book__select-item'], {
+      const days = [...new Set(scheduleData.map((ev) => ev.day))];
+      console.log(`[${getCurrentDateTime()}] [popup] Доступные дни:`, days);
+      days.forEach((day) => {
+        const option = createElement('option', day, ['book__select-item'], {
           value: day,
         });
-        mainSelect.appendChild(option);
+        mainSelect.append(option);
       });
     }
     sortSelectChange(mainSelect);
@@ -139,51 +178,66 @@
   }
 
   function sortSelectChange(mainSelect) {
-    var oldBtn = document.querySelector('.book__btn');
-    if (oldBtn) oldBtn.parentNode.removeChild(oldBtn);
-    mainSelect.addEventListener('change', function () {
+    const oldBtn = document.querySelector('.book__btn');
+    if (oldBtn) oldBtn.remove();
+
+    mainSelect.addEventListener('change', () => {
       useLoading(true);
       selectedOption = mainSelect.value;
-      log('popup', 'Изменён основной select:', selectedOption);
+      console.log(
+        `[${getCurrentDateTime()}] [popup] Изменён основной select:`,
+        selectedOption
+      );
       updateAndSaveState();
-      var oldSecondSelect = document.querySelector('.select-2');
-      if (oldSecondSelect)
-        oldSecondSelect.parentNode.removeChild(oldSecondSelect);
-      var container = document.querySelector('.book__box');
-      var filtered = [];
-      var placeholder = 'Select time';
+
+      const oldSecondSelect = document.querySelector('.select-2');
+      if (oldSecondSelect) oldSecondSelect.remove();
+
+      const container = document.querySelector('.book__box');
+      let filtered = [];
+      const placeholder = 'Select time';
       if (selectedSort === 'sport') {
-        filtered = scheduleData.filter(function (ev) {
-          return ev.name === selectedOption;
-        });
+        filtered = scheduleData.filter((ev) => ev.name === selectedOption);
       } else {
-        filtered = scheduleData.filter(function (ev) {
-          return ev.day === selectedOption;
-        });
+        filtered = scheduleData.filter((ev) => ev.day === selectedOption);
       }
-      var secondSelect = createElement('select', '', [
+
+      const secondSelect = createElement('select', '', [
         'book__select',
         'select-2',
       ]);
-      container.appendChild(secondSelect);
-      secondSelect.appendChild(
+      container.append(secondSelect);
+      secondSelect.append(
         createElement('option', placeholder, ['book__select-item'], {
           disabled: true,
           selected: true,
         })
       );
-      filtered.forEach(function (ev) {
-        var text =
-          selectedSort === 'sport'
-            ? ev.day + ' | ' + ev.start + ' - ' + ev.finish
-            : ev.start + ' - ' + ev.finish + ' | ' + ev.name;
-        secondSelect.appendChild(
-          createElement('option', text, ['book__select-item'], {
-            value: JSON.stringify(ev),
-          })
-        );
-      });
-      secondSelect.addEventListener('change', function () {
+
+      if (selectedSort === 'sport') {
+        filtered.forEach((ev) => {
+          secondSelect.append(
+            createElement(
+              'option',
+              `${ev.day} | ${ev.start} - ${ev.finish}`,
+              ['book__select-item'],
+              { value: JSON.stringify(ev) }
+            )
+          );
+        });
+      } else {
+        filtered.forEach((ev) => {
+          secondSelect.append(
+            createElement(
+              'option',
+              `${ev.start} - ${ev.finish} | ${ev.name}`,
+              ['book__select-item'],
+              { value: JSON.stringify(ev) }
+            )
+          );
+        });
+      }
+      secondSelect.addEventListener('change', () => {
         changeLastSelect(mainSelect, secondSelect);
       });
       useLoading(false);
@@ -191,47 +245,66 @@
   }
 
   function updateAndSaveState() {
-    var state = { selectedWeek: selectedWeek, selectedSort: selectedSort };
-    log('popup', 'Обновление состояния:', state);
+    const state = { selectedWeek, selectedSort };
+    console.log(
+      `[${getCurrentDateTime()}] [popup] Обновление состояния:`,
+      state
+    );
     savePopupState(state);
   }
 
   function changeLastSelect(mainSelect, secondSelect) {
-    var oldBtn = document.querySelector('.book__btn');
-    if (oldBtn) oldBtn.parentNode.removeChild(oldBtn);
-    var container = document.querySelector('.book__box');
-    var bookBtn = createElement('button', 'Create booking', [
+    const oldBtn = document.querySelector('.book__btn');
+    if (oldBtn) oldBtn.remove();
+
+    const container = document.querySelector('.book__box');
+    const bookBtn = createElement('button', 'Create booking', [
       'btn-reset',
       'book__btn',
     ]);
-    container.appendChild(bookBtn);
+    container.append(bookBtn);
     bookBtn.style.display = 'block';
     bookBtn.style.opacity = '1';
-    bookBtn.addEventListener('click', function () {
-      var value1 = mainSelect.value;
-      var value2 = secondSelect.value;
-      log('popup', 'Нажата кнопка бронирования:', value1, value2);
+    bookBtn.addEventListener('click', () => {
+      const value1 = mainSelect.value;
+      const value2 = secondSelect.value;
+      console.log(
+        `[${getCurrentDateTime()}] [popup] Нажата кнопка бронирования:`,
+        value1,
+        value2
+      );
       updateAndSaveState();
       book(value1, value2);
     });
   }
 
+  // Функция бронирования: после добавления бронирования запускается сканирование возможности записи
   function book(value1, value2) {
     if (!value1 || !value2) return;
-    var selectedEvent = JSON.parse(value2);
+    const selectedEvent = JSON.parse(value2);
     selectedEvent.week = selectedWeek;
-    log('popup', 'Событие для бронирования:', selectedEvent);
+    console.log(
+      `[${getCurrentDateTime()}] [popup] Событие для бронирования:`,
+      selectedEvent
+    );
     useLoading(true);
     chrome.runtime.sendMessage(
       { action: 'addToWaitingList', slot: selectedEvent },
-      function (response) {
-        log('popup', 'Ответ addToWaitingList:', response);
+      (response) => {
+        console.log(
+          `[${getCurrentDateTime()}] [popup] Ответ addToWaitingList:`,
+          response
+        );
         useLoading(false);
         updateWaitingList();
+        // После добавления бронирования запускается сканирование возможности записи
         chrome.runtime.sendMessage(
           { action: 'scheduleBooking', slot: selectedEvent },
-          function (resp) {
-            log('popup', 'Запуск scheduleBooking, ответ:', resp);
+          (resp) => {
+            console.log(
+              `[${getCurrentDateTime()}] [popup] Запуск scheduleBooking, ответ:`,
+              resp
+            );
           }
         );
       }
@@ -239,154 +312,162 @@
   }
 
   function updateWaitingList() {
-    getStorage('waitingList', function (err, data) {
-      log('popup', 'Обновление waiting list:', data && data.waitingList);
-      var waitingListContainer = document.querySelector('.waiting__list');
+    chrome.storage.local.get('waitingList', (data) => {
+      console.log(
+        `[${getCurrentDateTime()}] [popup] Обновление waiting list:`,
+        data.waitingList
+      );
+      const waitingListContainer = document.querySelector('.waiting__list');
       if (!waitingListContainer) {
-        log('popup', 'Контейнер waiting list не найден.');
+        console.error(
+          `[${getCurrentDateTime()}] [popup] Контейнер waiting list не найден.`
+        );
         return;
       }
       waitingListContainer.innerHTML = '';
-      var waitingLists = (data && data.waitingList) || {};
-      log('popup', 'Выбранная неделя:', selectedWeek);
-      var currentList = waitingLists[selectedWeek] || [];
+      const waitingLists = data.waitingList || {};
+      console.log(
+        `[${getCurrentDateTime()}] [popup] Выбранная неделя:`,
+        selectedWeek
+      );
+      const currentList = waitingLists[selectedWeek] || [];
       if (currentList.length > 0) {
-        var header = createElement('h4', 'Week: ' + selectedWeek, [
+        const header = createElement('h4', `Week: ${selectedWeek}`, [
           'waiting-header',
         ]);
         waitingListContainer.appendChild(header);
-        currentList.forEach(function (slot) {
-          var li = createElement(
-            'li',
-            slot.start +
-              ' - ' +
-              slot.finish +
-              ' | ' +
-              slot.name +
-              ' (' +
-              slot.day +
-              ') [' +
-              slot.status +
-              ']',
-            []
-          );
+        currentList.forEach((slot) => {
+          const li = createElement('li');
+          li.className = 'waiting-item';
+          li.textContent = `${slot.start} - ${slot.finish} | ${slot.name} (${slot.day}) [${slot.status}]`;
           if (slot.status === 'success')
             li.style.backgroundColor = 'lightgreen';
           else if (slot.status === 'failed')
             li.style.backgroundColor = 'lightcoral';
           else li.style.backgroundColor = 'lightyellow';
-          var deleteBtn = createElement('span', '✖', ['delete-btn']);
-          deleteBtn.addEventListener('click', function () {
-            log('popup', 'Удаление элемента:', slot);
+          const deleteBtn = createElement('span', '✖', ['delete-btn']);
+          deleteBtn.addEventListener('click', () => {
+            console.log(
+              `[${getCurrentDateTime()}] [popup] Удаление элемента:`,
+              slot
+            );
             removeWaitingItem(slot);
           });
           li.appendChild(deleteBtn);
           waitingListContainer.appendChild(li);
         });
       } else {
-        waitingListContainer.innerHTML =
-          '<p>No entries for week "' + selectedWeek + '"</p>';
+        waitingListContainer.innerHTML = `<p>No entries for week "${selectedWeek}"</p>`;
       }
     });
   }
 
   function removeWaitingItem(slotToRemove) {
-    getStorage('waitingList', function (err, data) {
-      var waitingLists = (data && data.waitingList) || {};
-      var identifier =
+    chrome.storage.local.get('waitingList', (data) => {
+      const waitingLists = data.waitingList || {};
+      const identifier =
         slotToRemove.name + slotToRemove.date + slotToRemove.start;
-      for (var week in waitingLists) {
-        waitingLists[week] = waitingLists[week].filter(function (slot) {
-          return slot.name + slot.date + slot.start !== identifier;
-        });
+      for (const week in waitingLists) {
+        waitingLists[week] = waitingLists[week].filter(
+          (slot) => slot.name + slot.date + slot.start !== identifier
+        );
       }
-      setStorage({ waitingList: waitingLists }, function () {
-        log('popup', 'Элемент удалён:', slotToRemove);
+      chrome.storage.local.set({ waitingList: waitingLists }, () => {
+        console.log(
+          `[${getCurrentDateTime()}] [popup] Элемент удалён:`,
+          slotToRemove
+        );
         updateWaitingList();
       });
     });
   }
 
-  chrome.storage.onChanged.addListener(function (changes, areaName) {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === 'local' && changes.waitingList) {
-      log('popup', 'waiting list обновлён.');
+      console.log(`[${getCurrentDateTime()}] [popup] waiting list обновлён.`);
       updateWaitingList();
     }
   });
 
-  function initUI() {
+  async function initUI() {
     useLoading(true);
-    log('popup', 'Инициализация UI popup...');
-    restorePopupState(function (popupState) {
-      if (popupState) {
-        selectedWeek = popupState.selectedWeek || selectedWeek;
-        selectedSort = popupState.selectedSort || selectedSort;
+    console.log(`[${getCurrentDateTime()}] [popup] Инициализация UI popup...`);
+    await restorePopupState();
+
+    const weekRadios = document.querySelectorAll('input[name="week-type"]');
+    const sortRadios = document.querySelectorAll('input[name="sort-type"]');
+
+    weekRadios.forEach((radio) => {
+      radio.checked = radio.value === selectedWeek;
+    });
+    sortRadios.forEach((radio) => {
+      const label = radio.nextElementSibling.textContent.trim().toLowerCase();
+      radio.checked = label === selectedSort;
+    });
+
+    updateAndSaveState();
+    loadSchedule();
+    updateWaitingList();
+    useLoading(false);
+
+    sortRadios.forEach((radio) => {
+      radio.addEventListener('change', () => {
+        useLoading(true);
+        selectedSort =
+          radio.nextElementSibling.textContent.trim().toLowerCase() === 'day'
+            ? 'day'
+            : 'sport';
+        console.log(
+          `[${getCurrentDateTime()}] [popup] Изменён тип сортировки:`,
+          selectedSort
+        );
+        selectedOption = null;
+        updateAndSaveState();
+        loadSchedule();
+      });
+    });
+
+    weekRadios.forEach((radio) => {
+      radio.addEventListener('change', () => {
+        useLoading(true);
+        selectedWeek = radio.value;
+        console.log(
+          `[${getCurrentDateTime()}] [popup] Изменена неделя:`,
+          selectedWeek
+        );
+        updateAndSaveState();
+        selectedOption = null;
+        chrome.runtime.sendMessage(
+          { action: 'navigateWeek', week: selectedWeek },
+          (response) => {
+            if (chrome.runtime.lastError)
+              console.error(
+                `[${getCurrentDateTime()}] [popup] Ошибка navigateWeek:`,
+                chrome.runtime.lastError.message
+              );
+            console.log(
+              `[${getCurrentDateTime()}] [popup] Ответ navigateWeek:`,
+              response
+            );
+            loadSchedule();
+            updateWaitingList();
+            useLoading(false);
+          }
+        );
+      });
+    });
+
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName === 'local' && changes.schedule) {
+        console.log(`[${getCurrentDateTime()}] [popup] Расписание обновлено.`);
+        loadSchedule();
       }
-      var weekRadios = document.querySelectorAll('input[name="week-type"]');
-      var sortRadios = document.querySelectorAll('input[name="sort-type"]');
-      weekRadios.forEach(function (radio) {
-        radio.checked = radio.value === selectedWeek;
-      });
-      sortRadios.forEach(function (radio) {
-        var label = radio.nextElementSibling
-          ? radio.nextElementSibling.textContent.trim().toLowerCase()
-          : '';
-        radio.checked = label === selectedSort;
-      });
-      updateAndSaveState();
-      loadSchedule();
-      updateWaitingList();
-      useLoading(false);
-      sortRadios.forEach(function (radio) {
-        radio.addEventListener('change', function () {
-          useLoading(true);
-          selectedSort =
-            radio.nextElementSibling &&
-            radio.nextElementSibling.textContent.trim().toLowerCase() === 'day'
-              ? 'day'
-              : 'sport';
-          log('popup', 'Изменён тип сортировки:', selectedSort);
-          selectedOption = null;
-          updateAndSaveState();
-          loadSchedule();
-        });
-      });
-      weekRadios.forEach(function (radio) {
-        radio.addEventListener('change', function () {
-          useLoading(true);
-          selectedWeek = radio.value;
-          log('popup', 'Изменена неделя:', selectedWeek);
-          updateAndSaveState();
-          selectedOption = null;
-          chrome.runtime.sendMessage(
-            { action: 'navigateWeek', week: selectedWeek },
-            function (response) {
-              if (chrome.runtime.lastError)
-                log(
-                  'popup',
-                  'Ошибка navigateWeek:',
-                  chrome.runtime.lastError.message
-                );
-              log('popup', 'Ответ navigateWeek:', response);
-              loadSchedule();
-              updateWaitingList();
-              useLoading(false);
-            }
-          );
-        });
-      });
-      chrome.storage.onChanged.addListener(function (changes, areaName) {
-        if (areaName === 'local' && changes.schedule) {
-          log('popup', 'Расписание обновлено.');
-          loadSchedule();
-        }
-      });
     });
   }
 
-  window.addEventListener('load', function () {
+  window.addEventListener('load', () => {
     useLoading(true);
-    log('popup', 'Инициализация popup UI...');
+    console.log(`[${getCurrentDateTime()}] [popup] Инициализация popup UI...`);
     initUI();
   });
 })();

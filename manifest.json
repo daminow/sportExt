@@ -3,6 +3,7 @@
   "name": "Auto Booking Sports IU",
   "version": "1.0",
   "description": "Autobooking IU Sports",
+  "type": "module",
   "permissions": [
     "storage",
     "activeTab",
@@ -25,11 +26,7 @@
   "content_scripts": [
     {
       "matches": ["https://sport.innopolis.university/profile/*"],
-      "js": ["utils.js", "content.js"],
-      "run_at": "document_idle"
+      "js": ["content.js"]
     }
-  ],
-  "content_security_policy": {
-    "extension_pages": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
-  }
+  ]
 }
