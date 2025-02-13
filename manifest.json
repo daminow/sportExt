@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Auto Booking Sports IU",
+  "version": "1.0",
+  "description": "Autobooking IU Sports",
+  "type": "module",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "alarms",
+    "notifications"
+  ],
+  "host_permissions": ["https://sport.innopolis.university/profile/"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://sport.innopolis.university/profile/*"],
+      "js": ["content.js"]
+    }
+  ]
+}
