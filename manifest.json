@@ -3,6 +3,11 @@
   "name": "Auto Booking Sports IU",
   "version": "1.0",
   "description": "Autobooking IU Sports",
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
   "permissions": [
     "storage",
     "activeTab",

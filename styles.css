@@ -134,6 +134,7 @@ label:last-child span {
   flex-direction: column;
   align-items: center;
   gap: 12px;
+  margin-bottom: 12px;
 }
 .book__select {
   width: 100%;
@@ -201,7 +202,6 @@ label:last-child span {
 
 .waiting-header {
   margin: 0;
-  margin-bottom: 12px;
   color: var(--color-s-700);
   font-size: 12px;
   text-align: start;
