@@ -453,10 +453,6 @@ if (isBackground) {
       });
     });
   });
-
-  // Создаём alarm с задержкой 1 минута
-  chrome.alarms.create('checkWaitingList', { delayInMinutes: 1 });
-  log('background', 'Начальный alarm "checkWaitingList" создан (1 минута).');
 }
 
 // ============ КОД POPUP ================
@@ -564,9 +560,19 @@ if (isPopup) {
           selected: true,
         })
       );
-      const sports = [...new Set(scheduleData.map((ev) => ev.name))];
+      const sports = [
+        ...new Set(
+          scheduleData
+            .filter((ev) => ev.status !== 'success')
+            .map((ev) => ev.name)
+        ),
+      ];
+
       log('popup', 'Доступные виды спорта:', sports);
       sports.forEach((sport) => {
+        console.log(true);
+        console.log(sport);
+        console.log(true);
         const option = createElement('option', sport, ['book__select-item'], {
           value: sport,
         });
@@ -624,15 +630,17 @@ if (isPopup) {
       );
 
       filtered.forEach((ev) => {
-        const text =
-          selectedSort === 'sport'
-            ? `${ev.day} | ${ev.start} - ${ev.finish}`
-            : `${ev.start} - ${ev.finish} | ${ev.name}`;
-        secondSelect.append(
-          createElement('option', text, ['book__select-item'], {
-            value: JSON.stringify(ev),
-          })
-        );
+        if (ev.status != 'success') {
+          const text =
+            selectedSort === 'sport'
+              ? `${ev.day} | ${ev.start} - ${ev.finish}`
+              : `${ev.start} - ${ev.finish} | ${ev.name}`;
+          secondSelect.append(
+            createElement('option', text, ['book__select-item'], {
+              value: JSON.stringify(ev),
+            })
+          );
+        }
       });
       secondSelect.addEventListener('change', () =>
         changeLastSelect(mainSelect, secondSelect)
@@ -696,20 +704,25 @@ if (isPopup) {
       const currentList = waitingLists[selectedWeek] || [];
       if (currentList.length > 0) {
         const header = createElement('h4', `Week: ${selectedWeek}`, [
-          'waiting-header',
+          'waiting__header',
         ]);
         container.appendChild(header);
         currentList.forEach((slot) => {
-          const li = createElement('li');
-          li.className = 'waiting-item';
-          li.textContent = `${slot.start} - ${slot.finish} | ${slot.name} (${slot.day}) [${slot.status}]`;
+          const li = createElement(
+            'li',
+            `${slot.day} | ${slot.start} - ${slot.finish}<br>${slot.name}`,
+            ['waiting__item']
+          );
           li.style.backgroundColor =
             slot.status === 'success'
               ? 'lightgreen'
               : slot.status === 'failed'
               ? 'lightcoral'
               : 'lightyellow';
-          const delBtn = createElement('span', '✖', ['delete-btn']);
+          const delBtn = createElement('button', '✖', [
+            'btn-reset',
+            'waiting__item-delete-btn',
+          ]);
           delBtn.addEventListener('click', () => {
             log('popup', 'Удаление элемента:', slot);
             removeWaitingItem(slot);
@@ -717,8 +730,6 @@ if (isPopup) {
           li.appendChild(delBtn);
           container.appendChild(li);
         });
-      } else {
-        container.innerHTML = `<p>No entries for week "${selectedWeek}"</p>`;
       }
     });
   }
@@ -866,6 +877,7 @@ if (isContent) {
           const [start, finish] = times;
           const eventStart = new Date(`${currentDate}T${start.trim()}:00`);
           const now = new Date();
+          const sevenDaysInMillis = 7 * 24 * 60 * 60 * 1000 - 1000;
           const inlineColor = row.style.backgroundColor;
           const computed = window.getComputedStyle(row);
           const bgColor = inlineColor || computed?.backgroundColor || '';
@@ -889,7 +901,8 @@ if (isContent) {
               });
             } else if (
               bgColor.includes('220, 53, 69') &&
-              eventStart - now < 648000000
+              eventStart - now < 648000000 &&
+              eventStart - now > sevenDaysInMillis
             ) {
               schedule.push({
                 day: currentDay,
@@ -1065,24 +1078,19 @@ if (isContent) {
     const remaining = bookingWindowTime - now;
 
     if (remaining <= 0) {
-      // Окно бронирования открыто — пробуем записать слот
       attemptBooking(slot);
     } else {
       let interval;
       if (remaining > 126000) {
-        // более 2.1 минут (126000 мс)
-        interval = 60000; // каждые 60 секунд
+        interval = 60000;
       } else if (remaining > 40000) {
-        // более 40 секунд
-        interval = 15000; // каждые 15 секунд
+        interval = 15000;
       } else if (remaining > 15000) {
-        // более 15 секунд
-        interval = 5000; // каждые 5 секунд
+        interval = 5000;
       } else if (remaining > 5000) {
-        // более 5 секунд
-        interval = 1000; // каждая секунда
+        interval = 1000;
       } else {
-        interval = 500; // каждые 500 мс
+        interval = 500;
       }
       log(
         'waitingList',
@@ -1163,7 +1171,6 @@ if (isContent) {
       });
     }
   }
-  // ========== Конец нового механизма проверки записи ==========
 
   // Обработка входящих сообщений от background
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
