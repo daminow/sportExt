@@ -1,4 +1,5 @@
 // main.js
+
 // ============ Общие утилиты ================
 const getCurrentDateTime = () => new Date().toLocaleTimeString();
 
@@ -23,7 +24,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const log = (module, message, ...args) =>
   console.log(`[${getCurrentDateTime()}] [${module}] ${message}`, ...args);
 
-// Определяем, в каком контексте мы находимся
+// Определяем, в каком контексте находимся
 const isBackground = typeof document === 'undefined';
 const isPopup =
   typeof document !== 'undefined' && location.protocol === 'chrome-extension:';
@@ -40,7 +41,6 @@ if (isBackground) {
     );
     let currentDate = '';
     for (const row of rows) {
-      // Если найден заголовок – обновляем текущую дату
       if (row.classList.contains('fc-list-heading')) {
         currentDate = row.getAttribute('data-date') || '';
         continue;
@@ -50,7 +50,6 @@ if (isBackground) {
         const timeElem = row.querySelector('.fc-list-item-time');
         if (!titleElem || !timeElem) continue;
         const times = timeElem.textContent.split(' - ');
-        // Проверяем совпадение даты, названия и времени начала
         if (
           currentDate === slot.date &&
           titleElem.textContent.includes(slot.name) &&
@@ -324,9 +323,10 @@ if (isBackground) {
                 case 'scheduleBooking': {
                   log(
                     'background',
-                    'scheduleBooking: Планирование бронирования для слота:',
+                    'scheduleBooking: Запрос планирования бронирования для слота:',
                     message.slot
                   );
+                  // Передаем задачу контент-скрипту (см. ниже)
                   chrome.tabs.sendMessage(
                     tab.id,
                     { action: 'scheduleBooking', slot: message.slot },
@@ -391,11 +391,12 @@ if (isBackground) {
             continue;
           }
           let bookingOffset;
-          if (slot.color.includes('0, 123, 255')) {
+          if (slot.color && slot.color.includes('0, 123, 255')) {
             bookingOffset = 7 * 24 * 60 * 60 * 1000;
           } else if (
-            slot.color.includes('red') ||
-            slot.color.includes('rgb(255, 0, 0)')
+            slot.color &&
+            (slot.color.includes('red') ||
+              slot.color.includes('rgb(255, 0, 0)'))
           ) {
             bookingOffset = 7 * 24 * 60 * 60 * 1000 + 12 * 60 * 60 * 1000;
           } else {
@@ -467,7 +468,6 @@ if (isPopup) {
     log('popup', 'Интерфейс расширения закрыт.');
   });
 
-  // Универсальная функция создания элемента
   function createElement(tag = 'div', text = '', classList = [], attrs = {}) {
     const element = document.createElement(tag);
     element.classList.add(...classList);
@@ -663,30 +663,23 @@ if (isPopup) {
       const value2 = secondSelect.value;
       log('popup', 'Нажата кнопка бронирования:', value1, value2);
       updateAndSaveState();
-      book(value1, value2);
+      // Отправляем сообщение для добавления в waiting list и запуска проверки записи
+      chrome.runtime.sendMessage(
+        { action: 'addToWaitingList', slot: JSON.parse(value2) },
+        (response) => {
+          log('popup', 'Ответ addToWaitingList:', response);
+          useLoading(false);
+          updateWaitingList();
+          // После добавления запускаем планирование записи
+          chrome.runtime.sendMessage(
+            { action: 'scheduleBooking', slot: JSON.parse(value2) },
+            (resp) => {
+              log('popup', 'Запуск scheduleBooking, ответ:', resp);
+            }
+          );
+        }
+      );
     });
-  }
-
-  function book(value1, value2) {
-    if (!value1 || !value2) return;
-    const selectedEvent = JSON.parse(value2);
-    selectedEvent.week = selectedWeek;
-    log('popup', 'Событие для бронирования:', selectedEvent);
-    useLoading(true);
-    chrome.runtime.sendMessage(
-      { action: 'addToWaitingList', slot: selectedEvent },
-      (response) => {
-        log('popup', 'Ответ addToWaitingList:', response);
-        useLoading(false);
-        updateWaitingList();
-        chrome.runtime.sendMessage(
-          { action: 'scheduleBooking', slot: selectedEvent },
-          (resp) => {
-            log('popup', 'Запуск scheduleBooking, ответ:', resp);
-          }
-        );
-      }
-    );
   }
 
   function updateWaitingList() {
@@ -828,7 +821,7 @@ if (isPopup) {
 
 // ============ КОД CONTENT SCRIPT ================
 if (isContent) {
-  // Сканирование расписания текущей недели
+  // Функция сканирования расписания текущей недели
   async function scanCurrentWeek() {
     const schedule = [];
     log('content', 'Начало сканирования расписания.');
@@ -1031,89 +1024,161 @@ if (isContent) {
       });
   }
 
-  async function scheduleBooking(slot) {
-    log('content', 'Планирование бронирования для слота:', slot);
+  // ========== Новый механизм проверки записи ==========
+  /**
+   * Функция, запускаемая сразу после добавления элемента в waiting list.
+   * Если до начала события осталось более 7 дней, ждём до открытия окна (7 дней до события).
+   * Иначе сразу запускаем проверку возможности записи.
+   */
+  function initiateBookingCheck(slot) {
     const eventStart = new Date(`${slot.date}T${slot.start}:00`);
-    const bookingOffset = 7 * 24 * 60 * 60 * 1000 + 12 * 60 * 60 * 1000;
-    const targetBookingTime = new Date(eventStart.getTime() - bookingOffset);
-    log('content', 'Время открытия записи:', targetBookingTime);
-    const check = () => {
-      const now = new Date();
-      if (now >= targetBookingTime) {
-        log('content', 'Время наступило. Пытаемся забронировать слот:', slot);
-        const rows = Array.from(
-          document.querySelectorAll('.swiper-slide-active .fc-list-table tr')
-        );
-        let currentDate = '';
-        let targetRow = null;
-        for (const row of rows) {
-          if (row.classList.contains('fc-list-heading')) {
-            currentDate = row.getAttribute('data-date') || '';
-            continue;
-          }
-          if (row.classList.contains('fc-list-item')) {
-            const titleElem = row.querySelector('.fc-list-item-title a');
-            const timeElem = row.querySelector('.fc-list-item-time');
-            if (!titleElem || !timeElem) continue;
-            const times = timeElem.textContent.split(' - ');
-            if (
-              currentDate === slot.date &&
-              titleElem.textContent.includes(slot.name) &&
-              times[0].trim() === slot.start
-            ) {
-              targetRow = row;
-              break;
-            }
-          }
+    // Окно бронирования открывается за 7 дней до начала события
+    const bookingWindowTime = new Date(
+      eventStart.getTime() - 7 * 24 * 60 * 60 * 1000
+    );
+    const now = new Date();
+    const timeUntilWindow = bookingWindowTime - now;
+
+    if (timeUntilWindow > 0) {
+      log(
+        'waitingList',
+        `Slot "${slot.name}" не доступен для бронирования. До открытия окна осталось ${timeUntilWindow} мс.`
+      );
+      setTimeout(() => {
+        checkBooking(slot);
+      }, timeUntilWindow);
+    } else {
+      checkBooking(slot);
+    }
+  }
+
+  /**
+   * Функция проверки возможности записи с динамическим интервалом.
+   * Интервал зависит от оставшегося времени до открытия окна бронирования.
+   */
+  function checkBooking(slot) {
+    const eventStart = new Date(`${slot.date}T${slot.start}:00`);
+    const bookingWindowTime = new Date(
+      eventStart.getTime() - 7 * 24 * 60 * 60 * 1000
+    );
+    const now = new Date();
+    const remaining = bookingWindowTime - now;
+
+    if (remaining <= 0) {
+      // Окно бронирования открыто — пробуем записать слот
+      attemptBooking(slot);
+    } else {
+      let interval;
+      if (remaining > 126000) {
+        // более 2.1 минут (126000 мс)
+        interval = 60000; // каждые 60 секунд
+      } else if (remaining > 40000) {
+        // более 40 секунд
+        interval = 15000; // каждые 15 секунд
+      } else if (remaining > 15000) {
+        // более 15 секунд
+        interval = 5000; // каждые 5 секунд
+      } else if (remaining > 5000) {
+        // более 5 секунд
+        interval = 1000; // каждая секунда
+      } else {
+        interval = 500; // каждые 500 мс
+      }
+      log(
+        'waitingList',
+        `Slot "${slot.name}" — осталось ${remaining} мс до открытия записи. Следующая проверка через ${interval} мс.`
+      );
+      setTimeout(() => {
+        checkBooking(slot);
+      }, interval);
+    }
+  }
+
+  /**
+   * Функция попытки бронирования слота.
+   * Производится поиск нужного элемента с учётом даты, времени и названия,
+   * затем эмулируется клик по кнопке бронирования.
+   */
+  function attemptBooking(slot) {
+    log('waitingList', `Попытка бронирования для слота "${slot.name}"`);
+    const rows = Array.from(
+      document.querySelectorAll('.swiper-slide-active .fc-list-table tr')
+    );
+    let currentDate = '';
+    let targetRow = null;
+
+    for (const row of rows) {
+      if (row.classList.contains('fc-list-heading')) {
+        currentDate = row.getAttribute('data-date') || '';
+        continue;
+      }
+      if (row.classList.contains('fc-list-item')) {
+        const titleElem = row.querySelector('.fc-list-item-title a');
+        const timeElem = row.querySelector('.fc-list-item-time');
+        if (!titleElem || !timeElem) continue;
+        const times = timeElem.textContent.split(' - ');
+        if (
+          currentDate === slot.date &&
+          titleElem.textContent.includes(slot.name) &&
+          times[0].trim() === slot.start
+        ) {
+          targetRow = row;
+          break;
         }
-        if (targetRow) {
-          targetRow.click();
-          setTimeout(() => {
-            const successBtn = document.querySelector(
-              '#group-info-modal .modal-footer .btn-success'
-            );
-            if (successBtn && !successBtn.disabled) {
-              successBtn.click();
-              log('content', 'Запись успешна для слота:', slot);
-              chrome.runtime.sendMessage({
-                action: 'updateWaitingListStatus',
-                slot: { ...slot, status: 'success' },
-              });
-            } else {
-              console.error(
-                'content',
-                'Кнопка подтверждения недоступна для слота:',
-                slot
-              );
-              chrome.runtime.sendMessage({
-                action: 'updateWaitingListStatus',
-                slot: { ...slot, status: 'failed' },
-              });
-            }
-          }, 500);
+      }
+    }
+
+    if (targetRow) {
+      targetRow.click();
+      setTimeout(() => {
+        const successBtn = document.querySelector(
+          '#group-info-modal .modal-footer .btn-success'
+        );
+        if (successBtn && !successBtn.disabled) {
+          successBtn.click();
+          log('waitingList', `Запись успешна для слота "${slot.name}"`);
+          chrome.runtime.sendMessage({
+            action: 'updateWaitingListStatus',
+            slot: { ...slot, status: 'success' },
+          });
         } else {
-          console.error(
-            'content',
-            'Строка для записи не найдена для слота:',
-            slot
+          log(
+            'waitingList',
+            `Запись НЕ удалась для слота "${slot.name}" (кнопка недоступна)`
           );
           chrome.runtime.sendMessage({
             action: 'updateWaitingListStatus',
             slot: { ...slot, status: 'failed' },
           });
         }
-      } else {
-        const timeLeft = targetBookingTime - now;
-        log(
-          'content',
-          `До записи для "${slot.name}" осталось ${timeLeft} мс. Проверка через 1 сек.`
-        );
-        setTimeout(check, 1000);
-      }
-    };
-    check();
+      }, 500);
+    } else {
+      log(
+        'waitingList',
+        `Запись НЕ удалась для слота "${slot.name}" (элемент не найден)`
+      );
+      chrome.runtime.sendMessage({
+        action: 'updateWaitingListStatus',
+        slot: { ...slot, status: 'failed' },
+      });
+    }
   }
+  // ========== Конец нового механизма проверки записи ==========
 
+  // Обработка входящих сообщений от background
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    log('content', 'Получено сообщение:', message);
+    if (message.action === 'navigateWeek') {
+      navigateToWeek(message.week).then(() => sendResponse({ success: true }));
+    } else if (message.action === 'scheduleBooking') {
+      // Запускаем новый механизм проверки записи
+      initiateBookingCheck(message.slot);
+      sendResponse({ success: true });
+    }
+    return true;
+  });
+
+  // Инициализация при загрузке страницы
   async function initAfterDelay() {
     log('content', 'Страница загружена. Инициализация...');
     try {
@@ -1192,17 +1257,5 @@ if (isContent) {
           });
       });
     }
-  });
-
-  // Обработка входящих сообщений
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    log('content', 'Получено сообщение:', message);
-    if (message.action === 'navigateWeek') {
-      navigateToWeek(message.week).then(() => sendResponse({ success: true }));
-    } else if (message.action === 'scheduleBooking') {
-      scheduleBooking(message.slot);
-      sendResponse({ success: true });
-    }
-    return true;
   });
 }
