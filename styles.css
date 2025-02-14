@@ -134,6 +134,7 @@ label:last-child span {
   flex-direction: column;
   align-items: center;
   gap: 12px;
+  margin-bottom: 12px;
 }
 .book__select {
   width: 100%;
@@ -199,11 +200,10 @@ label:last-child span {
   border-color: var(--color-s-900);
 }
 
-.waiting-header {
+.waiting__header {
   margin: 0;
-  margin-bottom: 12px;
   color: var(--color-s-700);
-  font-size: 12px;
+  font-size: 14px;
   text-align: start;
 }
 
@@ -212,11 +212,44 @@ label:last-child span {
   flex-direction: column;
   width: 100%;
   gap: 6px;
+  margin-bottom: 12px;
+}
+
+.waiting__item {
+  padding: 4px;
+  border-radius: 10px;
+  color: var(--color-s-700);
+  border: 1px solid var(--color-s-700);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.waiting__item-delete-btn {
+  width: 22px;
+  height: 22px;
+  background-color: var(--color-s-50);
+  color: var(--color-s-500);
+  border: 2px solid var(--color-s-500);
+  border-radius: 10px;
+  margin-left: 8px;
+  transition: background-color ease-in-out 0.5s, border-color ease-in-out 0.5s,
+    color ease-in-out 0.5s;
+}
+
+.waiting__item-delete-btn:hover,
+.waiting__item-delete-btn:active,
+.waiting__item-delete-btn:focus {
+  background-color: var(--color-s-500);
+  color: var(--color-s-50);
+  border-color: var(--color-s-500);
 }
 
 .created {
   font-size: 12px;
-  color: var(--color-s-200);
+  color: var(--color-s-500);
 }
 
 /* Loading */
