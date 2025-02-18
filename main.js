@@ -326,7 +326,7 @@ if (isBackground) {
                     'scheduleBooking: Запрос планирования бронирования для слота:',
                     message.slot
                   );
-                  // Передаем задачу контент-скрипту (см. ниже)
+                  // Передаем задачу контент-скрипту
                   chrome.tabs.sendMessage(
                     tab.id,
                     { action: 'scheduleBooking', slot: message.slot },
@@ -570,9 +570,6 @@ if (isPopup) {
 
       log('popup', 'Доступные виды спорта:', sports);
       sports.forEach((sport) => {
-        console.log(true);
-        console.log(sport);
-        console.log(true);
         const option = createElement('option', sport, ['book__select-item'], {
           value: sport,
         });
@@ -832,6 +829,23 @@ if (isPopup) {
 
 // ============ КОД CONTENT SCRIPT ================
 if (isContent) {
+  // Вспомогательная функция ожидания элемента (до 5 секунд)
+  function waitForElement(selector, timeout = 5000) {
+    return new Promise((resolve, reject) => {
+      const startTime = Date.now();
+      const interval = setInterval(() => {
+        const element = document.querySelector(selector);
+        if (element) {
+          clearInterval(interval);
+          resolve(element);
+        } else if (Date.now() - startTime > timeout) {
+          clearInterval(interval);
+          reject(new Error('Элемент не найден: ' + selector));
+        }
+      }, 100);
+    });
+  }
+
   // Функция сканирования расписания текущей недели
   async function scanCurrentWeek() {
     const schedule = [];
@@ -958,6 +972,7 @@ if (isContent) {
     }
   }
 
+  // Изменённая функция navigateToWeek с ожиданием появления кнопки
   async function navigateToWeek(targetWeek) {
     log('content', 'Навигация к неделе:', targetWeek);
     let prevDate = '';
@@ -991,24 +1006,20 @@ if (isContent) {
       return;
     }
 
-    if (targetWeek === 'next' && window.currentWeekState === 'this') {
-      const nextBtn = document.querySelector('.fc-next-button');
-      if (nextBtn) {
+    try {
+      if (targetWeek === 'next' && window.currentWeekState === 'this') {
+        const nextBtn = await waitForElement('.fc-next-button');
         log('content', 'Нажимаем кнопку "Следующая неделя".');
         nextBtn.click();
         window.currentWeekState = 'next';
-      } else {
-        console.error('content', 'Кнопка "Следующая неделя" не найдена.');
-      }
-    } else if (targetWeek === 'this' && window.currentWeekState === 'next') {
-      const todayBtn = document.querySelector('.fc-today-button');
-      if (todayBtn) {
+      } else if (targetWeek === 'this' && window.currentWeekState === 'next') {
+        const todayBtn = await waitForElement('.fc-today-button');
         log('content', 'Нажимаем кнопку "Сегодня".');
         todayBtn.click();
         window.currentWeekState = 'this';
-      } else {
-        console.error('content', 'Кнопка "Сегодня" не найдена.');
       }
+    } catch (error) {
+      console.error('content', 'Ошибка навигации к неделе:', error);
     }
 
     await setCurrentWeekStateAsync(window.currentWeekState);
