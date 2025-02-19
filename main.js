@@ -21,8 +21,14 @@ const setStorage = (data) =>
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-const log = (module, message, ...args) =>
-  console.log(`[${getCurrentDateTime()}] [${module}] ${message}`, ...args);
+// Промисификация chrome.tabs.query
+const queryTabs = (query) =>
+  new Promise((resolve, reject) => {
+    chrome.tabs.query(query, (tabs) => {
+      if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+      else resolve(tabs);
+    });
+  });
 
 // Определяем, в каком контексте находимся
 const isBackground = typeof document === 'undefined';
@@ -31,11 +37,10 @@ const isPopup =
 const isContent =
   typeof document !== 'undefined' && location.protocol.startsWith('http');
 
-// ============ КОД BACKGROUND (service worker) ================
+// ============ BACKGROUND (service worker) ================
 if (isBackground) {
-  // Функция бронирования через chrome.scripting.executeScript
+  // Функция бронирования – будет выполняться в контексте страницы через executeScript
   function bookSport(slot) {
-    log('bookSport', 'Начало попытки бронирования для слота:', slot);
     const rows = Array.from(
       document.querySelectorAll('.swiper-slide-active .fc-list-table tr')
     );
@@ -55,85 +60,60 @@ if (isBackground) {
           titleElem.textContent.includes(slot.name) &&
           times[0].trim() === slot.start
         ) {
-          log('bookSport', 'Найден корректный слот для бронирования:', slot);
           const checkInButton = document.querySelector(
             '.modal-content .btn-success'
           );
           if (checkInButton) {
-            log('bookSport', 'Кнопка бронирования найдена, выполняем клик.');
             checkInButton.click();
-          } else {
-            log('bookSport', 'Кнопка бронирования не найдена!');
           }
           return;
         }
       }
     }
-    log('bookSport', 'Слот для бронирования не найден:', slot);
   }
 
-  // Функции для работы с waiting list
-  function addToWaitingList(slot) {
-    log('addToWaitingList', 'Начало добавления слота в waiting list:', slot);
+  // Функции работы с waiting list
+  async function addToWaitingList(slot) {
     if (slot.status !== 'success') slot.status = 'waiting';
     if (!slot.week) {
-      chrome.storage.local.get({ currentWeekState: 'this' }, (data) => {
-        slot.week = data.currentWeekState;
-        processAddToWaitingList(slot);
+      const { currentWeekState = 'this' } = await getStorage({
+        currentWeekState: 'this',
       });
+      slot.week = currentWeekState;
+    }
+    await processAddToWaitingList(slot);
+  }
+
+  async function processAddToWaitingList(slot) {
+    const data = await getStorage('waitingList');
+    const waitingListObj = data.waitingList || {};
+    const weekList = waitingListObj[slot.week] || [];
+    const identifier = slot.name + slot.date + slot.start;
+    if (
+      !weekList.some(
+        (item) => item.name + item.date + item.start === identifier
+      )
+    ) {
+      weekList.unshift(slot);
+      waitingListObj[slot.week] = weekList;
+      await setStorage({ waitingList: waitingListObj });
+      showNotification(
+        slot.status === 'success'
+          ? 'Запись подтверждена'
+          : 'Добавлено в лист ожидания',
+        `${slot.name} (${slot.day})`,
+        'info'
+      );
     } else {
-      processAddToWaitingList(slot);
+      showNotification(
+        'Уже в листе ожидания',
+        `${slot.name} (${slot.day})`,
+        'info'
+      );
     }
   }
 
-  function processAddToWaitingList(slot) {
-    chrome.storage.local.get('waitingList', (data) => {
-      const waitingListObj = data.waitingList || {};
-      log(
-        'addToWaitingList',
-        'Текущее состояние waiting list из хранилища:',
-        waitingListObj
-      );
-      const weekList = waitingListObj[slot.week] || [];
-      const identifier = slot.name + slot.date + slot.start;
-      if (
-        !weekList.some(
-          (item) => item.name + item.date + item.start === identifier
-        )
-      ) {
-        weekList.unshift(slot);
-        waitingListObj[slot.week] = weekList;
-        chrome.storage.local.set({ waitingList: waitingListObj }, () => {
-          log(
-            'addToWaitingList',
-            `Элемент успешно добавлен в waiting list для недели "${slot.week}". Обновлённое состояние:`,
-            waitingListObj
-          );
-        });
-        showNotification(
-          slot.status === 'success'
-            ? 'Запись подтверждена'
-            : 'Добавлено в лист ожидания',
-          `${slot.name} (${slot.day})`,
-          'info'
-        );
-      } else {
-        log(
-          'addToWaitingList',
-          'Элемент уже присутствует в waiting list. Пропуск:',
-          slot
-        );
-        showNotification(
-          'Уже в листе ожидания',
-          `${slot.name} (${slot.day})`,
-          'info'
-        );
-      }
-    });
-  }
-
   function showNotification(title, message, type) {
-    log('showNotification', `${title} - ${message} (тип: ${type})`);
     chrome.notifications.create('', {
       type: 'basic',
       iconUrl: 'icon.png',
@@ -143,62 +123,39 @@ if (isBackground) {
     });
   }
 
-  // Обработка обновления вкладок
+  // Открытие попапа при загрузке нужной вкладки
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    log('background', `onUpdated: TabID=${tabId}, changeInfo=`, changeInfo);
     if (
       changeInfo.status === 'complete' &&
       tab?.url &&
       tab.url.startsWith('https://sport.innopolis.university/profile/')
     ) {
-      log('background', 'URL соответствует – открываем popup.');
       chrome.action.openPopup();
-    } else {
-      log(
-        'background',
-        'URL не соответствует или страница ещё не загружена полностью.'
-      );
     }
   });
 
   // Единый обработчик сообщений
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    log('background', 'onMessage: Получено сообщение:', message, 'от', sender);
     (async () => {
       try {
+        // Обработка сообщений, не требующих доступа к вкладке
         switch (message.action) {
           case 'updateSchedule': {
-            log('background', 'updateSchedule: Обновляем расписание.');
             await setStorage({
               schedule: message.schedule,
               lastUpdated: Date.now(),
               scanningComplete: true,
             });
-            log(
-              'background',
-              'updateSchedule: Расписание обновлено:',
-              message.schedule
-            );
             return sendResponse({ success: true });
           }
           case 'updateWaitingList': {
-            log(
-              'background',
-              'updateWaitingList: Запрос обновления waiting list.'
-            );
             return sendResponse({ success: true });
           }
           case 'openPopup': {
-            log('background', 'openPopup: Открытие popup.');
             chrome.action.openPopup();
             return sendResponse({ success: true });
           }
           case 'updateWaitingListStatus': {
-            log(
-              'background',
-              'updateWaitingListStatus: Обновление статуса для слота:',
-              message.slot
-            );
             const data = await getStorage('waitingList');
             const waitingLists = data.waitingList || {};
             const identifier =
@@ -206,159 +163,78 @@ if (isBackground) {
             for (const week in waitingLists) {
               waitingLists[week] = waitingLists[week].map((slot) => {
                 if (slot.name + slot.date + slot.start === identifier) {
-                  log(
-                    'background',
-                    `Обновление статуса для слота ${identifier} на ${message.slot.status}`
-                  );
                   return { ...slot, status: message.slot.status };
                 }
                 return slot;
               });
             }
             await setStorage({ waitingList: waitingLists });
-            log(
-              'background',
-              'Статус обновлён для слота:',
-              message.slot,
-              'Новый waiting list:',
-              waitingLists
-            );
             return sendResponse({ success: true });
           }
           default:
             break;
         }
 
-        // Для сообщений, требующих поиска вкладки с нужным URL
-        chrome.tabs.query(
-          { url: 'https://sport.innopolis.university/profile/*' },
-          (tabs) => {
-            log('background', 'Ищем вкладку с нужным URL...');
-            if (!tabs || tabs.length === 0) {
-              console.warn('background', 'Нет вкладок с нужным URL.');
-              return sendResponse({ error: 'Нет вкладок с нужным URL' });
-            }
-            const tab = tabs[0];
-            log('background', `Найдена вкладка, URL: ${tab.url}`);
-            try {
-              switch (message.action) {
-                case 'scanSchedule': {
-                  log(
-                    'background',
-                    'scanSchedule: Запрос сканирования для недели:',
-                    message.week
-                  );
-                  chrome.tabs.sendMessage(
-                    tab.id,
-                    { action: 'scanSchedule', week: message.week },
-                    (response) => {
-                      log(
-                        'background',
-                        'scanSchedule: Ответ получен:',
-                        response
-                      );
-                      sendResponse({ success: true });
-                    }
-                  );
-                  break;
-                }
-                case 'navigateWeek': {
-                  log(
-                    'background',
-                    'navigateWeek: Запрос навигации для недели:',
-                    message.week
-                  );
-                  chrome.tabs.sendMessage(
-                    tab.id,
-                    { action: 'navigateWeek', week: message.week },
-                    (response) => {
-                      log(
-                        'background',
-                        'navigateWeek: Ответ получен:',
-                        response
-                      );
-                      sendResponse({ success: true });
-                    }
-                  );
-                  break;
-                }
-                case 'bookSport': {
-                  log(
-                    'background',
-                    'bookSport: Запрос бронирования для слота:',
-                    message.slot
-                  );
-                  chrome.windows.getCurrent((win) => {
-                    if (!win) {
-                      log('background', 'Нет активного окна.');
-                      return sendResponse({ error: 'Нет активного окна' });
-                    }
-                    chrome.scripting
-                      .executeScript({
-                        target: { tabId: tab.id },
-                        func: bookSport,
-                        args: [message.slot],
-                      })
-                      .then(() => {
-                        log('background', 'Бронирование выполнено успешно.');
-                        sendResponse({ success: true });
-                      })
-                      .catch((err) => {
-                        log('background', 'Ошибка бронирования:', err);
-                        sendResponse({ error: err.message });
-                      });
-                  });
-                  break;
-                }
-                case 'addToWaitingList': {
-                  log(
-                    'background',
-                    'addToWaitingList: Добавление в waiting list для слота:',
-                    message.slot
-                  );
-                  addToWaitingList(message.slot);
-                  sendResponse({ success: true });
-                  break;
-                }
-                case 'scheduleBooking': {
-                  log(
-                    'background',
-                    'scheduleBooking: Запрос планирования бронирования для слота:',
-                    message.slot
-                  );
-                  // Передаем задачу контент-скрипту
-                  chrome.tabs.sendMessage(
-                    tab.id,
-                    { action: 'scheduleBooking', slot: message.slot },
-                    (response) => {
-                      log(
-                        'background',
-                        'scheduleBooking: Ответ получен:',
-                        response
-                      );
-                      sendResponse({ success: true });
-                    }
-                  );
-                  break;
-                }
-                default:
-                  console.warn(
-                    'background',
-                    'Неизвестное действие:',
-                    message.action
-                  );
-                  sendResponse({
-                    warning: 'Неизвестное действие: ' + message.action,
-                  });
-              }
-            } catch (error) {
-              log('background', 'Exception:', error);
-              sendResponse({ error: error.message });
-            }
+        // Для сообщений, требующих взаимодействия с вкладкой
+        const tabs = await queryTabs({
+          url: 'https://sport.innopolis.university/profile/*',
+        });
+        if (!tabs || tabs.length === 0) {
+          console.warn('background', 'Нет вкладок с нужным URL.');
+          return sendResponse({ error: 'Нет вкладок с нужным URL' });
+        }
+        const tab = tabs[0];
+
+        switch (message.action) {
+          case 'scanSchedule': {
+            chrome.tabs.sendMessage(
+              tab.id,
+              { action: 'scanSchedule', week: message.week },
+              () => sendResponse({ success: true })
+            );
+            break;
           }
-        );
+          case 'navigateWeek': {
+            chrome.tabs.sendMessage(
+              tab.id,
+              { action: 'navigateWeek', week: message.week },
+              () => sendResponse({ success: true })
+            );
+            break;
+          }
+          case 'bookSport': {
+            // Запускаем функцию bookSport в контексте вкладки
+            chrome.scripting
+              .executeScript({
+                target: { tabId: tab.id },
+                func: bookSport,
+                args: [message.slot],
+              })
+              .then(() => sendResponse({ success: true }))
+              .catch((err) => sendResponse({ error: err.message }));
+            break;
+          }
+          case 'addToWaitingList': {
+            await addToWaitingList(message.slot);
+            sendResponse({ success: true });
+            break;
+          }
+          case 'scheduleBooking': {
+            chrome.tabs.sendMessage(
+              tab.id,
+              { action: 'scheduleBooking', slot: message.slot },
+              () => sendResponse({ success: true })
+            );
+            break;
+          }
+          default: {
+            console.warn('background', 'Неизвестное действие:', message.action);
+            sendResponse({
+              warning: 'Неизвестное действие: ' + message.action,
+            });
+          }
+        }
       } catch (error) {
-        log('background', 'Ошибка в onMessage:', error);
         sendResponse({ error: error.message });
       }
     })();
@@ -367,29 +243,22 @@ if (isBackground) {
 
   // Обработка alarm для проверки waiting list
   chrome.alarms.onAlarm.addListener(async () => {
-    log('background', 'Alarm сработал. Проверка waiting list.');
-    chrome.storage.local.get('waitingList', (data) => {
+    try {
+      const data = await getStorage('waitingList');
       const waitingLists = data.waitingList || {};
       const now = new Date();
       let nextCheckTime = Infinity;
+
       for (const week in waitingLists) {
         const list = waitingLists[week];
-        if (list && list.length > 0) {
+        if (Array.isArray(list) && list.length > 0) {
           const slot = list[0];
-          log(
-            'background',
-            `Alarm: Обрабатываем слот для недели "${week}":`,
-            slot
-          );
           if (slot.status === 'success') {
-            log(
-              'background',
-              `Alarm: Слот (${slot.name} ${slot.date} ${slot.start}) уже успешен, пропуск.`
-            );
             list.shift();
             waitingLists[week] = list;
             continue;
           }
+          // Определяем смещение времени для бронирования по цвету
           let bookingOffset;
           if (slot.color && slot.color.includes('0, 123, 255')) {
             bookingOffset = 7 * 24 * 60 * 60 * 1000;
@@ -407,39 +276,23 @@ if (isBackground) {
             eventStart.getTime() - bookingOffset
           );
           const timeLeft = targetBookingTime - now;
-          log(
-            'background',
-            `Alarm: Для слота (${slot.name}) осталось ${timeLeft} мс до открытия записи.`
-          );
+
           if (timeLeft <= 0) {
-            log('background', 'Alarm: Время записи наступило для слота:', slot);
-            chrome.tabs.query(
-              { url: 'https://sport.innopolis.university/profile/*' },
-              (tabs) => {
-                if (tabs.length > 0) {
-                  log(
-                    'background',
-                    `Alarm: Отправляем scheduleBooking через вкладку ${tabs[0].id}.`
-                  );
-                  chrome.tabs.sendMessage(
-                    tabs[0].id,
-                    { action: 'scheduleBooking', slot },
-                    (response) => {
-                      log(
-                        'background',
-                        'Alarm: scheduleBooking выполнено, ответ:',
-                        response
-                      );
-                    }
-                  );
-                } else {
-                  console.warn(
-                    'background',
-                    'Alarm: Нет активных вкладок с нужным URL.'
-                  );
-                }
-              }
-            );
+            // Если окно бронирования открыто – отправляем сообщение контент-скрипту
+            const tabs = await queryTabs({
+              url: 'https://sport.innopolis.university/profile/*',
+            });
+            if (tabs.length > 0) {
+              chrome.tabs.sendMessage(tabs[0].id, {
+                action: 'scheduleBooking',
+                slot,
+              });
+            } else {
+              console.warn(
+                'background',
+                'Alarm: Нет активных вкладок с нужным URL.'
+              );
+            }
             list.shift();
             waitingLists[week] = list;
           } else {
@@ -447,26 +300,23 @@ if (isBackground) {
           }
         }
       }
-      log('background', 'Alarm: Итоговый waiting list:', waitingLists);
-      chrome.storage.local.set({ waitingList: waitingLists }, () => {
-        log('background', 'Alarm: waiting list обновлён.');
-      });
-    });
+      await setStorage({ waitingList: waitingLists });
+      // При необходимости можно перенастроить alarm на nextCheckTime
+    } catch (error) {
+      console.error('[background] Ошибка в alarm:', error);
+    }
   });
 }
 
-// ============ КОД POPUP ================
+// ============ POPUP ================
 if (isPopup) {
-  window.addEventListener('load', () => {
-    log('popup', 'Интерфейс расширения открыт.');
-  });
-  window.addEventListener('unload', () => {
-    log('popup', 'Интерфейс расширения закрыт.');
-  });
+  window.addEventListener('load', () => {});
+  window.addEventListener('unload', () => {});
 
   function createElement(tag = 'div', text = '', classList = [], attrs = {}) {
     const element = document.createElement(tag);
-    element.classList.add(...classList);
+    if (classList.length) element.classList.add(...classList);
+    // Используем textContent для безопасности, если требуется HTML – можно заменить на innerHTML
     element.innerHTML = text;
     Object.entries(attrs).forEach(([key, value]) => {
       element[key] = value;
@@ -480,29 +330,24 @@ if (isPopup) {
     if (show) {
       loader.style.display = 'flex';
       loader.style.opacity = '1';
-      log('popup', 'Loading ON');
     } else {
       loader.style.opacity = '0';
       loader.style.display = 'none';
-      log('popup', 'Loading OFF');
     }
   }
 
   function savePopupState(state) {
-    setStorage({ popupState: state })
-      .then(() => log('popup', 'Состояние сохранено:', state))
-      .catch((error) =>
-        console.error(
-          `[${getCurrentDateTime()}] [popup] Ошибка сохранения:`,
-          error
-        )
-      );
+    setStorage({ popupState: state }).catch((error) =>
+      console.error(
+        `[${getCurrentDateTime()}] [popup] Ошибка сохранения:`,
+        error
+      )
+    );
   }
 
   async function restorePopupState() {
     try {
       const data = await getStorage('popupState');
-      log('popup', 'Восстановлено состояние:', data.popupState);
       if (data.popupState) {
         selectedWeek = data.popupState.selectedWeek || selectedWeek;
         selectedSort = data.popupState.selectedSort || selectedSort;
@@ -526,20 +371,17 @@ if (isPopup) {
     try {
       const data = await getStorage(['schedule', 'scanningComplete']);
       scheduleData = data.schedule || [];
-      log('popup', 'Загружено расписание:', scheduleData);
       if (!data.scanningComplete) {
-        log('popup', `Сканирование не завершено (retry ${loadRetries}).`);
         loadRetries++;
-        if (loadRetries < maxRetries) setTimeout(loadSchedule, 500);
-        else {
+        if (loadRetries < maxRetries) {
+          await delay(500);
+          return loadSchedule();
+        } else {
           console.warn('popup', 'Превышено число попыток ожидания.');
-          updateSelects();
-          useLoading(false);
         }
-      } else {
-        updateSelects();
-        useLoading(false);
       }
+      updateSelects();
+      useLoading(false);
     } catch (error) {
       console.error('popup', 'Ошибка загрузки расписания:', error);
       useLoading(false);
@@ -567,8 +409,6 @@ if (isPopup) {
             .map((ev) => ev.name)
         ),
       ];
-
-      log('popup', 'Доступные виды спорта:', sports);
       sports.forEach((sport) => {
         const option = createElement('option', sport, ['book__select-item'], {
           value: sport,
@@ -583,7 +423,6 @@ if (isPopup) {
         })
       );
       const days = [...new Set(scheduleData.map((ev) => ev.day))];
-      log('popup', 'Доступные дни:', days);
       days.forEach((day) => {
         const option = createElement('option', day, ['book__select-item'], {
           value: day,
@@ -602,14 +441,13 @@ if (isPopup) {
     mainSelect.addEventListener('change', () => {
       useLoading(true);
       selectedOption = mainSelect.value;
-      log('popup', 'Основной select изменён:', selectedOption);
       updateAndSaveState();
 
       const oldSecondSelect = document.querySelector('.select-2');
       if (oldSecondSelect) oldSecondSelect.remove();
 
       const container = document.querySelector('.book__box');
-      let filtered =
+      const filtered =
         selectedSort === 'sport'
           ? scheduleData.filter((ev) => ev.name === selectedOption)
           : scheduleData.filter((ev) => ev.day === selectedOption);
@@ -627,7 +465,7 @@ if (isPopup) {
       );
 
       filtered.forEach((ev) => {
-        if (ev.status != 'success') {
+        if (ev.status !== 'success') {
           const text =
             selectedSort === 'sport'
               ? `${ev.day} | ${ev.start} - ${ev.finish}`
@@ -648,7 +486,6 @@ if (isPopup) {
 
   function updateAndSaveState() {
     const state = { selectedWeek, selectedSort };
-    log('popup', 'Обновление состояния:', state);
     savePopupState(state);
   }
 
@@ -664,24 +501,16 @@ if (isPopup) {
     bookBtn.style.display = 'block';
     bookBtn.style.opacity = '1';
     bookBtn.addEventListener('click', () => {
-      const value1 = mainSelect.value;
-      const value2 = secondSelect.value;
-      log('popup', 'Нажата кнопка бронирования:', value1, value2);
       updateAndSaveState();
-      // Отправляем сообщение для добавления в waiting list и запуска проверки записи
+      const slot = JSON.parse(secondSelect.value);
+      // Добавление в waiting list
       chrome.runtime.sendMessage(
-        { action: 'addToWaitingList', slot: JSON.parse(value2) },
+        { action: 'addToWaitingList', slot },
         (response) => {
           useLoading(false);
-          log('popup', 'Ответ addToWaitingList:', response);
           updateWaitingList();
-          // После добавления запускаем планирование записи
-          chrome.runtime.sendMessage(
-            { action: 'scheduleBooking', slot: JSON.parse(value2) },
-            (resp) => {
-              log('popup', 'Запуск scheduleBooking, ответ:', resp);
-            }
-          );
+          // Запуск планирования записи
+          chrome.runtime.sendMessage({ action: 'scheduleBooking', slot });
         }
       );
     });
@@ -689,7 +518,6 @@ if (isPopup) {
 
   function updateWaitingList() {
     chrome.storage.local.get('waitingList', (data) => {
-      log('popup', 'Обновление waiting list:', data.waitingList);
       const container = document.querySelector('.waiting__list');
       if (!container) {
         console.error('popup', 'Контейнер waiting list не найден.');
@@ -697,7 +525,6 @@ if (isPopup) {
       }
       container.innerHTML = '';
       const waitingLists = data.waitingList || {};
-      log('popup', 'Выбранная неделя:', selectedWeek);
       const currentList = waitingLists[selectedWeek] || [];
       if (currentList.length > 0) {
         const header = createElement('h4', `Week: ${selectedWeek}`, [
@@ -720,10 +547,7 @@ if (isPopup) {
             'btn-reset',
             'waiting__item-delete-btn',
           ]);
-          delBtn.addEventListener('click', () => {
-            log('popup', 'Удаление элемента:', slot);
-            removeWaitingItem(slot);
-          });
+          delBtn.addEventListener('click', () => removeWaitingItem(slot));
           li.appendChild(delBtn);
           container.appendChild(li);
         });
@@ -742,26 +566,20 @@ if (isPopup) {
         );
       }
       chrome.storage.local.set({ waitingList: waitingLists }, () => {
-        log('popup', 'Элемент удалён:', slotToRemove);
         updateWaitingList();
       });
     });
   }
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName === 'local' && changes.waitingList) {
-      log('popup', 'waiting list обновлён.');
-      updateWaitingList();
-    }
-    if (areaName === 'local' && changes.schedule) {
-      log('popup', 'Расписание обновлено.');
-      loadSchedule();
+    if (areaName === 'local') {
+      if (changes.waitingList) updateWaitingList();
+      if (changes.schedule) loadSchedule();
     }
   });
 
   async function initUI() {
     useLoading(true);
-    log('popup', 'Инициализация UI popup...');
     await restorePopupState();
 
     const weekRadios = document.querySelectorAll('input[name="week-type"]');
@@ -776,21 +594,20 @@ if (isPopup) {
     });
 
     updateAndSaveState();
-    loadSchedule();
+    await loadSchedule();
     updateWaitingList();
     useLoading(false);
 
     sortRadios.forEach((radio) => {
-      radio.addEventListener('change', () => {
+      radio.addEventListener('change', async () => {
         useLoading(true);
         selectedSort =
           radio.nextElementSibling.textContent.trim().toLowerCase() === 'day'
             ? 'day'
             : 'sport';
-        log('popup', 'Тип сортировки изменён:', selectedSort);
         selectedOption = null;
         updateAndSaveState();
-        loadSchedule();
+        await loadSchedule();
       });
     });
 
@@ -798,9 +615,7 @@ if (isPopup) {
       radio.addEventListener('change', () => {
         useLoading(true);
         selectedWeek = radio.value;
-        log('popup', 'Неделя изменена:', selectedWeek);
         updateAndSaveState();
-        selectedOption = null;
         chrome.runtime.sendMessage(
           { action: 'navigateWeek', week: selectedWeek },
           (response) => {
@@ -810,7 +625,6 @@ if (isPopup) {
                 'Ошибка navigateWeek:',
                 chrome.runtime.lastError.message
               );
-            log('popup', 'Ответ navigateWeek:', response);
             loadSchedule();
             updateWaitingList();
             useLoading(false);
@@ -822,14 +636,13 @@ if (isPopup) {
 
   window.addEventListener('load', () => {
     useLoading(true);
-    log('popup', 'Инициализация popup UI...');
     initUI();
   });
 }
 
-// ============ КОД CONTENT SCRIPT ================
+// ============ CONTENT SCRIPT ================
 if (isContent) {
-  // Вспомогательная функция ожидания элемента (до 5 секунд)
+  // Вспомогательная функция ожидания элемента (до timeout мс)
   function waitForElement(selector, timeout = 5000) {
     return new Promise((resolve, reject) => {
       const startTime = Date.now();
@@ -846,13 +659,13 @@ if (isContent) {
     });
   }
 
-  // Функция сканирования расписания текущей недели
+  // Сканирование расписания текущей недели
   async function scanCurrentWeek() {
     const schedule = [];
-    log('content', 'Начало сканирования расписания.');
     const rows = Array.from(
       document.querySelectorAll('.swiper-slide-active .fc-list-table tr')
     );
+    // Определяем текущую дату и день из первого heading-элемента
     let headingRow = rows.find((row) =>
       row.classList.contains('fc-list-heading')
     );
@@ -933,10 +746,6 @@ if (isContent) {
         }
       }
     });
-    log(
-      'content',
-      `Сканирование завершено. Найдено событий: ${schedule.length}`
-    );
     return schedule;
   }
 
@@ -955,7 +764,6 @@ if (isContent) {
   async function getCurrentWeekStateAsync() {
     try {
       const data = await getStorage({ currentWeekState: 'this' });
-      log('content', 'Текущее состояние недели:', data.currentWeekState);
       return data.currentWeekState;
     } catch (error) {
       console.error('content', 'Ошибка получения состояния недели:', error);
@@ -966,55 +774,35 @@ if (isContent) {
   async function setCurrentWeekStateAsync(state) {
     try {
       await setStorage({ currentWeekState: state });
-      log('content', 'Состояние недели сохранено:', state);
     } catch (error) {
       console.error('content', 'Ошибка сохранения состояния недели:', error);
     }
   }
 
-  // Изменённая функция navigateToWeek с ожиданием появления кнопки
+  // Функция навигации по неделям с ожиданием появления кнопок
   async function navigateToWeek(targetWeek) {
-    log('content', 'Навигация к неделе:', targetWeek);
-    let prevDate = '';
     const heading = document.querySelector('.fc-list-heading');
-    if (heading) prevDate = heading.getAttribute('data-date');
+    const prevDate = heading ? heading.getAttribute('data-date') : '';
     const currentWeekState = await getCurrentWeekStateAsync();
     window.currentWeekState = currentWeekState;
     if (window.currentWeekState === targetWeek) {
       const schedule = await scanCurrentWeek();
-      log('content', 'Неделя уже актуальна. Расписание:', schedule);
-      chrome.runtime.sendMessage(
-        { action: 'updateSchedule', schedule },
-        (response) => {
-          log('content', 'Ответ updateSchedule после навигации:', response);
-        }
-      );
+      chrome.runtime.sendMessage({ action: 'updateSchedule', schedule });
       schedule
         .filter((ev) => ev.status === 'success')
-        .forEach((ev) => {
-          chrome.runtime.sendMessage(
-            { action: 'addToWaitingList', slot: ev },
-            (response) => {
-              log(
-                'content',
-                'addToWaitingList после навигации, ответ:',
-                response
-              );
-            }
-          );
-        });
+        .forEach((ev) =>
+          chrome.runtime.sendMessage({ action: 'addToWaitingList', slot: ev })
+        );
       return;
     }
 
     try {
       if (targetWeek === 'next' && window.currentWeekState === 'this') {
         const nextBtn = await waitForElement('.fc-next-button');
-        log('content', 'Нажимаем кнопку "Следующая неделя".');
         nextBtn.click();
         window.currentWeekState = 'next';
       } else if (targetWeek === 'this' && window.currentWeekState === 'next') {
         const todayBtn = await waitForElement('.fc-today-button');
-        log('content', 'Нажимаем кнопку "Сегодня".');
         todayBtn.click();
         window.currentWeekState = 'this';
       }
@@ -1025,38 +813,19 @@ if (isContent) {
     await setCurrentWeekStateAsync(window.currentWeekState);
     await delay(1000);
     const schedule = await scanCurrentWeek();
-    log('content', 'Сканирование после навигации, расписание:', schedule);
-    chrome.runtime.sendMessage(
-      { action: 'updateSchedule', schedule },
-      (response) => {
-        log('content', 'Ответ updateSchedule после навигации:', response);
-      }
-    );
+    chrome.runtime.sendMessage({ action: 'updateSchedule', schedule });
     schedule
       .filter((ev) => ev.status === 'success')
-      .forEach((ev) => {
-        chrome.runtime.sendMessage(
-          { action: 'addToWaitingList', slot: ev },
-          (response) => {
-            log(
-              'content',
-              'addToWaitingList после навигации, ответ:',
-              response
-            );
-          }
-        );
-      });
+      .forEach((ev) =>
+        chrome.runtime.sendMessage({ action: 'addToWaitingList', slot: ev })
+      );
   }
 
-  // ========== Новый механизм проверки записи ==========
-  /**
-   * Функция, запускаемая сразу после добавления элемента в waiting list.
-   * Если до начала события осталось более 7 дней, ждём до открытия окна (7 дней до события).
-   * Иначе сразу запускаем проверку возможности записи.
-   */
+  // ===== Новый механизм проверки бронирования =====
+
+  // Функция инициирует проверку записи, ожидая открытие окна бронирования (7 дней до события)
   function initiateBookingCheck(slot) {
     const eventStart = new Date(`${slot.date}T${slot.start}:00`);
-    // Окно бронирования открывается за 7 дней до начала события
     const bookingWindowTime = new Date(
       eventStart.getTime() - 7 * 24 * 60 * 60 * 1000
     );
@@ -1064,22 +833,13 @@ if (isContent) {
     const timeUntilWindow = bookingWindowTime - now;
 
     if (timeUntilWindow > 0) {
-      log(
-        'waitingList',
-        `Slot "${slot.name}" не доступен для бронирования. До открытия окна осталось ${timeUntilWindow} мс.`
-      );
-      setTimeout(() => {
-        checkBooking(slot);
-      }, timeUntilWindow);
+      setTimeout(() => checkBooking(slot), timeUntilWindow);
     } else {
       checkBooking(slot);
     }
   }
 
-  /**
-   * Функция проверки возможности записи с динамическим интервалом.
-   * Интервал зависит от оставшегося времени до открытия окна бронирования.
-   */
+  // Функция проверки возможности записи с динамическим интервалом
   function checkBooking(slot) {
     const eventStart = new Date(`${slot.date}T${slot.start}:00`);
     const bookingWindowTime = new Date(
@@ -1092,34 +852,17 @@ if (isContent) {
       attemptBooking(slot);
     } else {
       let interval;
-      if (remaining > 126000) {
-        interval = 60000;
-      } else if (remaining > 40000) {
-        interval = 15000;
-      } else if (remaining > 15000) {
-        interval = 5000;
-      } else if (remaining > 5000) {
-        interval = 1000;
-      } else {
-        interval = 500;
-      }
-      log(
-        'waitingList',
-        `Slot "${slot.name}" — осталось ${remaining} мс до открытия записи. Следующая проверка через ${interval} мс.`
-      );
-      setTimeout(() => {
-        checkBooking(slot);
-      }, interval);
+      if (remaining > 126000) interval = 60000;
+      else if (remaining > 40000) interval = 15000;
+      else if (remaining > 15000) interval = 5000;
+      else if (remaining > 5000) interval = 1000;
+      else interval = 500;
+      setTimeout(() => checkBooking(slot), interval);
     }
   }
 
-  /**
-   * Функция попытки бронирования слота.
-   * Производится поиск нужного элемента с учётом даты, времени и названия,
-   * затем эмулируется клик по кнопке бронирования.
-   */
+  // Функция попытки бронирования слота
   function attemptBooking(slot) {
-    log('waitingList', `Попытка бронирования для слота "${slot.name}"`);
     const rows = Array.from(
       document.querySelectorAll('.swiper-slide-active .fc-list-table tr')
     );
@@ -1155,16 +898,11 @@ if (isContent) {
         );
         if (successBtn && !successBtn.disabled) {
           successBtn.click();
-          log('waitingList', `Запись успешна для слота "${slot.name}"`);
           chrome.runtime.sendMessage({
             action: 'updateWaitingListStatus',
             slot: { ...slot, status: 'success' },
           });
         } else {
-          log(
-            'waitingList',
-            `Запись НЕ удалась для слота "${slot.name}" (кнопка недоступна)`
-          );
           chrome.runtime.sendMessage({
             action: 'updateWaitingListStatus',
             slot: { ...slot, status: 'failed' },
@@ -1172,10 +910,6 @@ if (isContent) {
         }
       }, 500);
     } else {
-      log(
-        'waitingList',
-        `Запись НЕ удалась для слота "${slot.name}" (элемент не найден)`
-      );
       chrome.runtime.sendMessage({
         action: 'updateWaitingListStatus',
         slot: { ...slot, status: 'failed' },
@@ -1185,49 +919,30 @@ if (isContent) {
 
   // Обработка входящих сообщений от background
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    log('content', 'Получено сообщение:', message);
     if (message.action === 'navigateWeek') {
       navigateToWeek(message.week).then(() => sendResponse({ success: true }));
     } else if (message.action === 'scheduleBooking') {
-      // Запускаем новый механизм проверки записи
       initiateBookingCheck(message.slot);
       sendResponse({ success: true });
     }
     return true;
   });
 
-  // Инициализация при загрузке страницы
+  // Инициализация после загрузки страницы
   async function initAfterDelay() {
-    log('content', 'Страница загружена. Инициализация...');
     try {
       const data = await getStorage({ currentWeekState: 'this' });
-      log('content', 'Текущее состояние недели:', data.currentWeekState);
       if (data.currentWeekState === 'next') {
         document.querySelector('.fc-next-button')?.click();
         await delay(2000);
       }
       const schedule = await scanCurrentWeek();
-      log('content', 'Результат сканирования:', schedule);
-      chrome.runtime.sendMessage(
-        { action: 'updateSchedule', schedule },
-        (response) => {
-          log('content', 'Ответ updateSchedule:', response);
-        }
-      );
+      chrome.runtime.sendMessage({ action: 'updateSchedule', schedule });
       schedule
         .filter((ev) => ev.status === 'success')
-        .forEach((ev) => {
-          chrome.runtime.sendMessage(
-            { action: 'addToWaitingList', slot: ev },
-            (response) => {
-              log(
-                'content',
-                'addToWaitingList для активной записи, ответ:',
-                response
-              );
-            }
-          );
-        });
+        .forEach((ev) =>
+          chrome.runtime.sendMessage({ action: 'addToWaitingList', slot: ev })
+        );
     } catch (error) {
       console.error('content', 'Ошибка в initAfterDelay:', error);
     }
@@ -1241,38 +956,14 @@ if (isContent) {
       '.fc-prev-button, .fc-next-button, .fc-today-button'
     );
     if (btn) {
-      log('content', 'Кнопка смены недели нажата, сканирование запускается.');
       delay(1500).then(async () => {
         const schedule = await scanCurrentWeek();
-        log(
-          'content',
-          'Сканирование после смены недели завершено. Расписание:',
-          schedule
-        );
-        chrome.runtime.sendMessage(
-          { action: 'updateSchedule', schedule },
-          (response) => {
-            log(
-              'content',
-              'Ответ updateSchedule после смены недели:',
-              response
-            );
-          }
-        );
+        chrome.runtime.sendMessage({ action: 'updateSchedule', schedule });
         schedule
           .filter((ev) => ev.status === 'success')
-          .forEach((ev) => {
-            chrome.runtime.sendMessage(
-              { action: 'addToWaitingList', slot: ev },
-              (response) => {
-                log(
-                  'content',
-                  'addToWaitingList после смены недели, ответ:',
-                  response
-                );
-              }
-            );
-          });
+          .forEach((ev) =>
+            chrome.runtime.sendMessage({ action: 'addToWaitingList', slot: ev })
+          );
       });
     }
   });
