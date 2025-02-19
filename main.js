@@ -672,8 +672,8 @@ if (isPopup) {
       chrome.runtime.sendMessage(
         { action: 'addToWaitingList', slot: JSON.parse(value2) },
         (response) => {
-          log('popup', 'Ответ addToWaitingList:', response);
           useLoading(false);
+          log('popup', 'Ответ addToWaitingList:', response);
           updateWaitingList();
           // После добавления запускаем планирование записи
           chrome.runtime.sendMessage(
