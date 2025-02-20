@@ -3,7 +3,7 @@ module.exports = {
     {
       name: 'sportext-server',
       script: './src/server.js',
-      cwd: __dirname,
+      cwd: '/root/sportExt/backend',
       watch: false,
       env: {
         NODE_ENV: 'production',

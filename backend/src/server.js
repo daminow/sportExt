@@ -11,7 +11,7 @@ const app = express();
 // Устанавливаем безопасные HTTP-заголовки
 app.use(helmet());
 
-// Логирование запросов (используется в режиме разработки)
+// Логирование запросов (в режиме разработки)
 if (process.env.NODE_ENV !== 'production') {
   app.use(morgan('dev'));
 }
@@ -137,8 +137,9 @@ app.get('/projects/sportext/generate/:code', async (req, res) => {
 /**
  * Эндпоинт для перезагрузки сервера (админский).
  * GET /admin/server/restart
- * Требует заголовок x-api-key.
- * Завершает процесс через 1 секунду, чтобы PM2 или другой менеджер перезапустил приложение.
+ * Этот эндпоинт требует наличие заголовка x-api-key.
+ * При перезапуске сервер завершает процесс через 1 секунду.
+ * Если сервер запущен под PM2 или аналогичным менеджером, он автоматически перезапустится.
  */
 app.get('/admin/server/restart', adminAuth, (req, res) => {
   res.json({ message: 'Сервер перезагружается...' });
@@ -150,12 +151,8 @@ app.get('/admin/server/restart', adminAuth, (req, res) => {
 // Настройка порта
 const PORT = process.env.PORT || 3000;
 
-// Запуск сервера: в production-режиме через HTTPS (если заданы SSL-пути), иначе HTTP
-if (
-  process.env.NODE_ENV === 'production' &&
-  process.env.SSL_KEY_PATH &&
-  process.env.SSL_CERT_PATH
-) {
+// Запуск сервера: в production-режиме через HTTPS, иначе HTTP
+if (process.env.NODE_ENV === 'production') {
   const httpsOptions = {
     key: fs.readFileSync(process.env.SSL_KEY_PATH),
     cert: fs.readFileSync(process.env.SSL_CERT_PATH),
@@ -164,7 +161,7 @@ if (
     console.log(`Безопасный сервер запущен на порту ${PORT}`);
   });
 } else {
-  app.listen(PORT, '0.0.0.0', () => {
+  app.listen(PORT, () => {
     console.log(`Сервер запущен на порту ${PORT}`);
   });
 }
