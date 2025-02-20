@@ -30,7 +30,7 @@ const queryTabs = (query) =>
     });
   });
 
-// Определяем, в каком контексте находимся
+// Определяем контекст выполнения
 const isBackground = typeof document === 'undefined';
 const isPopup =
   typeof document !== 'undefined' && location.protocol === 'chrome-extension:';
@@ -39,7 +39,9 @@ const isContent =
 
 // ============ BACKGROUND (service worker) ================
 if (isBackground) {
-  // Функция бронирования – будет выполняться в контексте страницы через executeScript
+  const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+  // Функция бронирования – выполняется через executeScript в контексте вкладки
   function bookSport(slot) {
     const rows = Array.from(
       document.querySelectorAll('.swiper-slide-active .fc-list-table tr')
@@ -85,8 +87,9 @@ if (isBackground) {
   }
 
   async function processAddToWaitingList(slot) {
-    const data = await getStorage('waitingList');
-    const waitingListObj = data.waitingList || {};
+    const { waitingList: waitingListObj = {} } = await getStorage(
+      'waitingList'
+    );
     const weekList = waitingListObj[slot.week] || [];
     const identifier = slot.name + slot.date + slot.start;
     if (
@@ -138,7 +141,7 @@ if (isBackground) {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
-        // Обработка сообщений, не требующих доступа к вкладке
+        // Сообщения, не требующие доступа к вкладке
         switch (message.action) {
           case 'updateSchedule': {
             await setStorage({
@@ -156,17 +159,17 @@ if (isBackground) {
             return sendResponse({ success: true });
           }
           case 'updateWaitingListStatus': {
-            const data = await getStorage('waitingList');
-            const waitingLists = data.waitingList || {};
+            const { waitingList: waitingLists = {} } = await getStorage(
+              'waitingList'
+            );
             const identifier =
               message.slot.name + message.slot.date + message.slot.start;
             for (const week in waitingLists) {
-              waitingLists[week] = waitingLists[week].map((slot) => {
-                if (slot.name + slot.date + slot.start === identifier) {
-                  return { ...slot, status: message.slot.status };
-                }
-                return slot;
-              });
+              waitingLists[week] = waitingLists[week].map((slot) =>
+                slot.name + slot.date + slot.start === identifier
+                  ? { ...slot, status: message.slot.status }
+                  : slot
+              );
             }
             await setStorage({ waitingList: waitingLists });
             return sendResponse({ success: true });
@@ -175,7 +178,7 @@ if (isBackground) {
             break;
         }
 
-        // Для сообщений, требующих взаимодействия с вкладкой
+        // Сообщения, требующие взаимодействия с вкладкой
         const tabs = await queryTabs({
           url: 'https://sport.innopolis.university/profile/*',
         });
@@ -203,7 +206,6 @@ if (isBackground) {
             break;
           }
           case 'bookSport': {
-            // Запускаем функцию bookSport в контексте вкладки
             chrome.scripting
               .executeScript({
                 target: { tabId: tab.id },
@@ -244,8 +246,9 @@ if (isBackground) {
   // Обработка alarm для проверки waiting list
   chrome.alarms.onAlarm.addListener(async () => {
     try {
-      const data = await getStorage('waitingList');
-      const waitingLists = data.waitingList || {};
+      const { waitingList: waitingLists = {} } = await getStorage(
+        'waitingList'
+      );
       const now = new Date();
       let nextCheckTime = Infinity;
 
@@ -258,18 +261,17 @@ if (isBackground) {
             waitingLists[week] = list;
             continue;
           }
-          // Определяем смещение времени для бронирования по цвету
           let bookingOffset;
           if (slot.color && slot.color.includes('0, 123, 255')) {
-            bookingOffset = 7 * 24 * 60 * 60 * 1000;
+            bookingOffset = ONE_WEEK_MS;
           } else if (
             slot.color &&
             (slot.color.includes('red') ||
               slot.color.includes('rgb(255, 0, 0)'))
           ) {
-            bookingOffset = 7 * 24 * 60 * 60 * 1000 + 12 * 60 * 60 * 1000;
+            bookingOffset = ONE_WEEK_MS + 12 * 60 * 60 * 1000;
           } else {
-            bookingOffset = 7 * 24 * 60 * 60 * 1000;
+            bookingOffset = ONE_WEEK_MS;
           }
           const eventStart = new Date(`${slot.date}T${slot.start}:00`);
           const targetBookingTime = new Date(
@@ -278,7 +280,6 @@ if (isBackground) {
           const timeLeft = targetBookingTime - now;
 
           if (timeLeft <= 0) {
-            // Если окно бронирования открыто – отправляем сообщение контент-скрипту
             const tabs = await queryTabs({
               url: 'https://sport.innopolis.university/profile/*',
             });
@@ -319,10 +320,10 @@ if (isPopup) {
       chrome.tabs.create({ url: createdLink.href });
     });
   }
+
   function createElement(tag = 'div', text = '', classList = [], attrs = {}) {
     const element = document.createElement(tag);
     if (classList.length) element.classList.add(...classList);
-    // Используем textContent для безопасности, если требуется HTML – можно заменить на innerHTML
     element.innerHTML = text;
     Object.entries(attrs).forEach(([key, value]) => {
       element[key] = value;
@@ -509,21 +510,20 @@ if (isPopup) {
     bookBtn.addEventListener('click', () => {
       updateAndSaveState();
       const slot = JSON.parse(secondSelect.value);
-      // Добавление в waiting list
       chrome.runtime.sendMessage(
         { action: 'addToWaitingList', slot },
         (response) => {
           useLoading(false);
           updateWaitingList();
-          // Запуск планирования записи
           chrome.runtime.sendMessage({ action: 'scheduleBooking', slot });
         }
       );
     });
   }
 
-  function updateWaitingList() {
-    chrome.storage.local.get('waitingList', (data) => {
+  async function updateWaitingList() {
+    try {
+      const data = await getStorage('waitingList');
       const container = document.querySelector('.waiting__list');
       if (!container) {
         console.error('popup', 'Контейнер waiting list не найден.');
@@ -558,11 +558,14 @@ if (isPopup) {
           container.appendChild(li);
         });
       }
-    });
+    } catch (error) {
+      console.error('popup', 'Ошибка обновления waiting list:', error);
+    }
   }
 
-  function removeWaitingItem(slotToRemove) {
-    chrome.storage.local.get('waitingList', (data) => {
+  async function removeWaitingItem(slotToRemove) {
+    try {
+      const data = await getStorage('waitingList');
       const waitingLists = data.waitingList || {};
       const identifier =
         slotToRemove.name + slotToRemove.date + slotToRemove.start;
@@ -571,10 +574,11 @@ if (isPopup) {
           (slot) => slot.name + slot.date + slot.start !== identifier
         );
       }
-      chrome.storage.local.set({ waitingList: waitingLists }, () => {
-        updateWaitingList();
-      });
-    });
+      await setStorage({ waitingList: waitingLists });
+      updateWaitingList();
+    } catch (error) {
+      console.error('popup', 'Ошибка удаления waiting list item:', error);
+    }
   }
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -648,7 +652,7 @@ if (isPopup) {
 
 // ============ CONTENT SCRIPT ================
 if (isContent) {
-  // Вспомогательная функция ожидания элемента (до timeout мс)
+  // Функция ожидания элемента (до timeout мс)
   function waitForElement(selector, timeout = 5000) {
     return new Promise((resolve, reject) => {
       const startTime = Date.now();
@@ -671,7 +675,6 @@ if (isContent) {
     const rows = Array.from(
       document.querySelectorAll('.swiper-slide-active .fc-list-table tr')
     );
-    // Определяем текущую дату и день из первого heading-элемента
     let headingRow = rows.find((row) =>
       row.classList.contains('fc-list-heading')
     );
@@ -785,7 +788,7 @@ if (isContent) {
     }
   }
 
-  // Функция навигации по неделям с ожиданием появления кнопок
+  // Навигация по неделям с ожиданием появления кнопок
   async function navigateToWeek(targetWeek) {
     const heading = document.querySelector('.fc-list-heading');
     const prevDate = heading ? heading.getAttribute('data-date') : '';
@@ -829,7 +832,7 @@ if (isContent) {
 
   // ===== Новый механизм проверки бронирования =====
 
-  // Функция инициирует проверку записи, ожидая открытие окна бронирования (7 дней до события)
+  // Инициирует проверку записи с ожиданием открытия окна бронирования (7 дней до события)
   function initiateBookingCheck(slot) {
     const eventStart = new Date(`${slot.date}T${slot.start}:00`);
     const bookingWindowTime = new Date(
@@ -845,7 +848,7 @@ if (isContent) {
     }
   }
 
-  // Функция проверки возможности записи с динамическим интервалом
+  // Проверка возможности бронирования с динамическим интервалом
   function checkBooking(slot) {
     const eventStart = new Date(`${slot.date}T${slot.start}:00`);
     const bookingWindowTime = new Date(
@@ -867,7 +870,7 @@ if (isContent) {
     }
   }
 
-  // Функция попытки бронирования слота
+  // Попытка бронирования слота
   function attemptBooking(slot) {
     const rows = Array.from(
       document.querySelectorAll('.swiper-slide-active .fc-list-table tr')
