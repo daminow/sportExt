@@ -312,7 +312,13 @@ if (isBackground) {
 if (isPopup) {
   window.addEventListener('load', () => {});
   window.addEventListener('unload', () => {});
-
+  const createdLink = document.querySelector('.created');
+  if (createdLink) {
+    createdLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      chrome.tabs.create({ url: createdLink.href });
+    });
+  }
   function createElement(tag = 'div', text = '', classList = [], attrs = {}) {
     const element = document.createElement(tag);
     if (classList.length) element.classList.add(...classList);
