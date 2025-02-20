@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
 const helmet = require('helmet');
@@ -7,10 +8,10 @@ const morgan = require('morgan');
 
 const app = express();
 
-// Установка безопасных HTTP-заголовков
+// Устанавливаем безопасные HTTP-заголовки
 app.use(helmet());
 
-// Логирование запросов в режиме разработки
+// Логирование запросов (в режиме разработки)
 if (process.env.NODE_ENV !== 'production') {
   app.use(morgan('dev'));
 }
@@ -18,10 +19,10 @@ if (process.env.NODE_ENV !== 'production') {
 // Для парсинга JSON в теле запроса
 app.use(express.json());
 
-// Настройка подключения к PostgreSQL через переменную окружения DATABASE_URL
+// Настройка подключения к базе данных PostgreSQL
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // Для некоторых хостингов (например, Heroku) может потребоваться:
+  // Если требуется SSL (например, на Heroku), раскомментируйте следующую строку:
   // ssl: { rejectUnauthorized: false }
 });
 
@@ -57,8 +58,9 @@ app.get('/projects/sportext/check/:code', async (req, res) => {
 });
 
 /**
- * Эндпоинт для добавления нового кода (защищённый административным API-ключом).
+ * Эндпоинт для добавления нового кода (админский).
  * POST /projects/sportext/add
+ * Ожидает JSON с полями: code, active (необязательно), expiry_date
  */
 app.post('/projects/sportext/add', adminAuth, async (req, res) => {
   const { code, active, expiry_date } = req.body;
@@ -133,31 +135,28 @@ app.get('/projects/sportext/generate/:code', async (req, res) => {
 });
 
 /**
- * Эндпоинт для перезагрузки сервера.
+ * Эндпоинт для перезагрузки сервера (админский).
  * GET /admin/server/restart
- * Доступ защищён административным API-ключом.
- *
- * Для корректной работы данного эндпоинта рекомендуется запускать сервер под менеджером процессов,
- * таким как PM2, который автоматически перезапустит приложение после завершения процесса.
+ * Этот эндпоинт требует наличие заголовка x-api-key.
+ * При перезапуске сервер завершает процесс через 1 секунду.
+ * Если сервер запущен под PM2 или аналогичным менеджером, он автоматически перезапустится.
  */
 app.get('/admin/server/restart', adminAuth, (req, res) => {
   res.json({ message: 'Сервер перезагружается...' });
-  // Задержка в 1 секунду перед завершением процесса
   setTimeout(() => {
     process.exit(0);
   }, 1000);
 });
 
-// Настройка порта сервера
+// Настройка порта
 const PORT = process.env.PORT || 3000;
 
-// Запуск сервера через HTTPS в production-среде или обычным HTTP в режиме разработки
+// Запуск сервера: в production-режиме через HTTPS, иначе HTTP
 if (process.env.NODE_ENV === 'production') {
   const httpsOptions = {
     key: fs.readFileSync(process.env.SSL_KEY_PATH),
     cert: fs.readFileSync(process.env.SSL_CERT_PATH),
   };
-
   https.createServer(httpsOptions, app).listen(PORT, () => {
     console.log(`Безопасный сервер запущен на порту ${PORT}`);
   });
